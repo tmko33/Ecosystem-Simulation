@@ -4,16 +4,14 @@
 #include <vector>
 #include <array>
 #include <memory>
-#include <random>
 #include <algorithm>
 #include <omp.h>
+#include <unistd.h> // Para usleep
 
 using namespace std;
 
-// Definición de tipos de criaturas
 enum CreatureKind { NONE = 0, STONE = 1, BUNNY = 2, PREDATOR = 3 };
 
-// Estructura para coordenadas
 struct Position {
     int row, col;
     
@@ -28,7 +26,6 @@ struct Position {
     }
 };
 
-// Clase base para todas las entidades del ecosistema
 class Creature {
 public:
     CreatureKind kind;
@@ -50,7 +47,6 @@ public:
     }
 };
 
-// Simulador principal del ecosistema
 class EcosystemSimulator {
 private:
     int bunny_reproduction_period;
@@ -149,7 +145,6 @@ public:
                     int move_choice = (current_generation + bunny->pos.row + bunny->pos.col) % possible_moves.size();
                     Position new_location = possible_moves[move_choice];
                     
-                    // Crear descendencia si es tiempo de reproducción
                     if (bunny->canReproduce(current_generation, bunny_reproduction_period)) {
                         auto offspring = make_shared<Creature>(BUNNY, bunny->pos, current_generation + 1, current_generation + 1);
                         local_destinations[bunny->pos].push_back(offspring);
@@ -162,7 +157,6 @@ public:
             }
         }
         
-        // Consolidar resultados de threads
         #pragma omp parallel sections
         {
             #pragma section
@@ -180,7 +174,6 @@ public:
             }
         }
         
-        // Resolver conflictos: el más viejo sobrevive
         for (auto& [position, creature_list] : destination_groups) {
             auto survivor = *max_element(creature_list.begin(), creature_list.end(),
                 [current_generation](const shared_ptr<Creature>& a, const shared_ptr<Creature>& b) {
@@ -191,7 +184,6 @@ public:
             bunnies.push_back(survivor);
         }
         
-        // Restaurar otras criaturas en el grid
         #pragma omp parallel sections
         {
             #pragma section
@@ -225,7 +217,6 @@ public:
                 vector<Position> hunting_spots = findValidDestinations(predator, true);
                 bool successfully_hunted = false;
                 
-                // Intentar cazar primero
                 if (!hunting_spots.empty()) {
                     int hunt_choice = (current_generation + predator->pos.row + predator->pos.col) % hunting_spots.size();
                     Position prey_location = hunting_spots[hunt_choice];
@@ -233,7 +224,6 @@ public:
                     auto prey = getCreatureAt(prey_location);
                     if (prey) local_consumed.insert(prey);
                     
-                    // Reproducción después de cazar
                     if (predator->canReproduce(current_generation, predator_reproduction_period)) {
                         auto offspring = make_shared<Creature>(PREDATOR, predator->pos, current_generation + 1, current_generation + 1);
                         local_destinations[predator->pos].push_back(offspring);
@@ -246,7 +236,6 @@ public:
                     successfully_hunted = true;
                 }
                 
-                // Si no cazó, intentar moverse (si no está muriendo de hambre)
                 if (!successfully_hunted && !predator->isStarving(current_generation, predator_starvation_limit)) {
                     vector<Position> empty_spots = findValidDestinations(predator, false);
                     if (!empty_spots.empty()) {
@@ -269,7 +258,6 @@ public:
         {
             #pragma section
             {
-                // Eliminar presas consumidas
                 set<shared_ptr<Creature>> all_consumed;
                 for (const auto& local_set : thread_prey_consumed) {
                     all_consumed.insert(local_set.begin(), local_set.end());
@@ -284,7 +272,6 @@ public:
             }
             #pragma section
             {
-                // Consolidar destinos
                 for (auto& thread_map : thread_destinations) {
                     for (auto& [position, creature_list] : thread_map) {
                         destination_groups[position].insert(destination_groups[position].end(), 
@@ -298,7 +285,6 @@ public:
             }
         }
         
-        // Resolver conflictos: más viejo gana, luego el que comió más recientemente
         for (auto& [position, creature_list] : destination_groups) {
             sort(creature_list.begin(), creature_list.end(), 
                 [](const shared_ptr<Creature>& a, const shared_ptr<Creature>& b) {
@@ -326,90 +312,78 @@ public:
     }
     
     void displayWorld(int generation) {
-        if (generation != 0) cout << endl << endl;
-        cout << "Generation " << generation << endl;
+        // Limpiar pantalla (funciona en terminales Unix/Linux)
+        cout << "\033[2J\033[1;1H";
         
-        // Crear bordes
-        for (int i = 0; i < grid_cols + 2; i++) cout << "-";
-        cout << "   ";
-        for (int i = 0; i < grid_cols + 2; i++) cout << "-";
-        cout << " ";
-        for (int i = 0; i < grid_cols + 2; i++) cout << "-";
-        cout << endl;
+        cout << "=== ECOSYSTEM SIMULATION ===" << endl;
+        cout << "Generation: " << generation << " / " << total_generations << endl;
+        cout << "Rabbits: " << bunnies.size() << " | Foxes: " << predators.size() << " | Rocks: " << stones.size() << endl << endl;
         
-        // Crear matrices de visualización
-        vector<vector<char>> display1(grid_rows, vector<char>(grid_cols, ' '));
-        vector<vector<char>> display2(grid_rows, vector<char>(grid_cols, ' '));
-        vector<vector<char>> display3(grid_rows, vector<char>(grid_cols, ' '));
+        // Leyenda
+        cout << "Legend: * = Rock, R = Rabbit, F = Fox" << endl;
+        cout << "Numbers show age (rabbits) or hunger (foxes)" << endl << endl;
         
-        // Colocar piedras
-        for (auto stone : stones) {
-            if (stone->pos.row >= 0 && stone->pos.row < grid_rows && 
-                stone->pos.col >= 0 && stone->pos.col < grid_cols) {
-                display1[stone->pos.row][stone->pos.col] = '*';
-                display2[stone->pos.row][stone->pos.col] = '*';
-                display3[stone->pos.row][stone->pos.col] = '*';
-            }
-        }
+        // Borde superior
+        cout << "+";
+        for (int j = 0; j < grid_cols; j++) cout << "--";
+        cout << "+" << endl;
         
-        // Colocar conejos
-        for (auto bunny : bunnies) {
-            if (bunny->pos.row >= 0 && bunny->pos.row < grid_rows && 
-                bunny->pos.col >= 0 && bunny->pos.col < grid_cols && 
-                display1[bunny->pos.row][bunny->pos.col] != '*') {
-                display1[bunny->pos.row][bunny->pos.col] = 'R';
-                display2[bunny->pos.row][bunny->pos.col] = '0' + max(0, generation - bunny->generation_born) % 10;
-                display3[bunny->pos.row][bunny->pos.col] = 'R';
-            }
-        }
-        
-        // Colocar depredadores
-        for (auto predator : predators) {
-            if (predator->pos.row >= 0 && predator->pos.row < grid_rows && 
-                predator->pos.col >= 0 && predator->pos.col < grid_cols && 
-                display1[predator->pos.row][predator->pos.col] != '*') {
-                display1[predator->pos.row][predator->pos.col] = 'F';
-                display2[predator->pos.row][predator->pos.col] = '0' + max(0, generation - predator->generation_born) % 10;
-                int hunger_level = max(0, generation - predator->last_meal_time);
-                if (hunger_level >= 0 && hunger_level <= 9) {
-                    display3[predator->pos.row][predator->pos.col] = '0' + hunger_level;
-                } else {
-                    display3[predator->pos.row][predator->pos.col] = '+';
-                }
-            }
-        }
-        
-        // Mostrar las matrices
+        // Contenido de la grid
         for (int i = 0; i < grid_rows; i++) {
             cout << "|";
-            for (int j = 0; j < grid_cols; j++) cout << display1[i][j];
-            cout << "|   |";
-            for (int j = 0; j < grid_cols; j++) cout << display2[i][j];
-            cout << "| |";
-            for (int j = 0; j < grid_cols; j++) cout << display3[i][j];
+            for (int j = 0; j < grid_cols; j++) {
+                auto creature = getCreatureAt(Position(i, j));
+                if (creature == nullptr) {
+                    cout << "  ";
+                } else {
+                    switch(creature->kind) {
+                        case STONE:
+                            cout << " *";
+                            break;
+                        case BUNNY: {
+                            int age = generation - creature->generation_born;
+                            if (age > 9) cout << "R+";
+                            else cout << "R" << age;
+                            break;
+                        }
+                        case PREDATOR: {
+                            int hunger = generation - creature->last_meal_time;
+                            if (hunger > 9) cout << "F+";
+                            else cout << "F" << hunger;
+                            break;
+                        }
+                        default:
+                            cout << "  ";
+                    }
+                }
+            }
             cout << "|" << endl;
         }
         
-        for (int i = 0; i < grid_cols + 2; i++) cout << "-";
-        cout << "   ";
-        for (int i = 0; i < grid_cols + 2; i++) cout << "-";
-        cout << " ";
-        for (int i = 0; i < grid_cols + 2; i++) cout << "-";
+        // Borde inferior
+        cout << "+";
+        for (int j = 0; j < grid_cols; j++) cout << "--";
+        cout << "+" << endl;
+        
+        // Pausa para visualización (0.5 segundos)
+        usleep(500000);
     }
     
     void runSimulation() {
         omp_set_num_threads(omp_get_max_threads());
         
-        //displayWorld(0);
+        // Mostrar estado inicial
+        displayWorld(0);
+        
         for (int gen = 0; gen < total_generations; gen++) {
             simulateBunnyGeneration(gen);
             simulatePredatorGeneration(gen);
-            //displayWorld(gen + 1);
+            displayWorld(gen + 1);
         }
-        //cout << endl << endl;
     }
     
     void outputFinalConfiguration() {
+        cout << "\n=== FINAL CONFIGURATION ===" << endl;
         cout << bunny_reproduction_period << " " << predator_reproduction_period << " " 
              << predator_starvation_limit << " 0 " << grid_rows << " " << grid_cols << " " 
              << (stones.size() + bunnies.size() + predators.size()) << endl;
