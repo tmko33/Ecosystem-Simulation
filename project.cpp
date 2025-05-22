@@ -6,9 +6,36 @@
 #include <memory>
 #include <algorithm>
 #include <omp.h>
-#include <unistd.h> // Para usleep
+#include <unistd.h>
+#include <termios.h>
+#include <fcntl.h>
 
 using namespace std;
+
+bool kbhit() {
+    struct termios oldt, newt;
+    int ch;
+    int oldf;
+    
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    oldf = fcntl(STDIN_FILENO, F_GETFL, 0);
+    fcntl(STDIN_FILENO, F_SETFL, oldf | O_NONBLOCK);
+    
+    ch = getchar();
+    
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+    fcntl(STDIN_FILENO, F_SETFL, oldf);
+    
+    if (ch != EOF) {
+        ungetc(ch, stdin);
+        return true;
+    }
+    
+    return false;
+}
 
 enum CreatureKind { NONE = 0, STONE = 1, BUNNY = 2, PREDATOR = 3 };
 
@@ -312,23 +339,19 @@ public:
     }
     
     void displayWorld(int generation) {
-        // Limpiar pantalla (funciona en terminales Unix/Linux)
         cout << "\033[2J\033[1;1H";
         
         cout << "=== ECOSYSTEM SIMULATION ===" << endl;
         cout << "Generation: " << generation << " / " << total_generations << endl;
         cout << "Rabbits: " << bunnies.size() << " | Foxes: " << predators.size() << " | Rocks: " << stones.size() << endl << endl;
         
-        // Leyenda
-        cout << "Legend: * = Rock, R = Rabbit, F = Fox" << endl;
-        cout << "Numbers show age (rabbits) or hunger (foxes)" << endl << endl;
+        cout << "Legend: * = Rock, R = Rabbit (age), F = Fox (hunger)" << endl;
+        cout << "Controls: [p] Pause/Continue  [+] Speed up  [-] Slow down" << endl << endl;
         
-        // Borde superior
         cout << "+";
         for (int j = 0; j < grid_cols; j++) cout << "--";
         cout << "+" << endl;
         
-        // Contenido de la grid
         for (int i = 0; i < grid_rows; i++) {
             cout << "|";
             for (int j = 0; j < grid_cols; j++) {
@@ -360,25 +383,65 @@ public:
             cout << "|" << endl;
         }
         
-        // Borde inferior
         cout << "+";
         for (int j = 0; j < grid_cols; j++) cout << "--";
         cout << "+" << endl;
-        
-        // Pausa para visualización (0.5 segundos)
-        usleep(500000);
     }
     
     void runSimulation() {
         omp_set_num_threads(omp_get_max_threads());
         
-        // Mostrar estado inicial
+        int delay_ms = 4000;
+        bool paused = false;
+        
         displayWorld(0);
+        cout << "\nInitial state. Press any key to start...";
+        cin.ignore();
         
         for (int gen = 0; gen < total_generations; gen++) {
             simulateBunnyGeneration(gen);
             simulatePredatorGeneration(gen);
             displayWorld(gen + 1);
+            
+            bool waiting = true;
+            while (waiting) {
+                if (kbhit()) {
+                    char c = getchar();
+                    switch(c) {
+                        case 'p':
+                        case 'P':
+                            paused = !paused;
+                            if (paused) {
+                                cout << "\nSimulation PAUSED. Press [p] to continue...";
+                            } else {
+                                cout << "\nSimulation RESUMED.";
+                                usleep(500000);
+                                displayWorld(gen + 1);
+                            }
+                            break;
+                        case '+':
+                            delay_ms = max(100, delay_ms - 500);
+                            cout << "\nSpeed increased. Delay: " << delay_ms/1000.0 << "s";
+                            usleep(500000);
+                            displayWorld(gen + 1);
+                            break;
+                        case '-':
+                            delay_ms = min(5000, delay_ms + 500);
+                            cout << "\nSpeed decreased. Delay: " << delay_ms/1000.0 << "s";
+                            usleep(500000);
+                            displayWorld(gen + 1);
+                            break;
+                    }
+                }
+                
+                if (!paused) {
+                    waiting = false;
+                } else {
+                    usleep(100000);
+                }
+            }
+            
+            usleep(delay_ms * 1000);
         }
     }
     
@@ -426,6 +489,12 @@ public:
 };
 
 int main() {
+    struct termios oldt, newt;
+    tcgetattr(STDIN_FILENO, &oldt);
+    newt = oldt;
+    newt.c_lflag &= ~(ICANON | ECHO);
+    tcsetattr(STDIN_FILENO, TCSANOW, &newt);
+    
     EcosystemSimulator simulator;
     int br, pr, ps, gen, rows, cols, pop;
     cin >> br >> pr >> ps >> gen >> rows >> cols >> pop;
@@ -449,6 +518,8 @@ int main() {
     simulator.runSimulation();
     simulator.outputFinalConfiguration();
     simulator.cleanup();
+    
+    tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
     
     return 0;
 }
